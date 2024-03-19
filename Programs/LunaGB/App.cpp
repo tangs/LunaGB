@@ -1,6 +1,10 @@
 #include "App.hpp"
+
 #include <Luna/Runtime/Log.hpp>
 #include <Luna/ImGui/ImGui.hpp>
+#include <Luna/Window/FileDialog.hpp>
+#include <Luna/Window/MessageBox.hpp>
+#include <Luna/Runtime/File.hpp>
 
 RV App::init()
 {
@@ -9,6 +13,7 @@ RV App::init()
         is_exiting = false;
         // In order to see LunaSDK logs.
         set_log_to_platform_enabled(true);
+        set_log_to_platform_verbosity(LogVerbosity::verbose);
         rhi_device = RHI::get_main_device();
         u32 num_queues = rhi_device->get_num_command_queues();
         rhi_queue_index = U32_MAX;
@@ -21,12 +26,12 @@ RV App::init()
                 break;
             }
         }
-        if(rhi_queue_index == U32_MAX)
+        if (rhi_queue_index == U32_MAX)
         {
             return set_error(BasicError::not_supported(), "No suitable GPU present queue found.");
         }
         // Create window and RHI resources.
-        luset(window, Window::new_window("LunaGB", Window::WindowDisplaySettings::as_windowed(Window::DEFAULT_POS, Window::DEFAULT_POS, 1000, 1000), Window::WindowCreationFlag::resizable));
+        luset(window, Window::new_window("LunaGB", Window::WindowDisplaySettings::as_windowed(300, 300, 600, 400), Window::WindowCreationFlag::resizable));
         luset(swap_chain, rhi_device->new_swap_chain(rhi_queue_index, window, RHI::SwapChainDesc({0, 0, 2, RHI::Format::bgra8_unorm, true})));
         luset(cmdbuf, rhi_device->new_command_buffer(rhi_queue_index));
         // Register close event.
@@ -34,6 +39,7 @@ RV App::init()
         // Register resize event.
         window->get_resize_event().add_handler([this](Window::IWindow* window, u32 width, u32 height)
         {
+            log_verbose("LunaGB", "resize: %u %u", width, height);
             auto _ = swap_chain->reset({width, height, 2, RHI::Format::unknown, true});
         });
         ImGuiUtils::set_active_window(window);
@@ -101,10 +107,50 @@ void App::draw_main_menu_bar()
         {
             if(ImGui::MenuItem("Open"))
             {
-                // TODO...
+                open_cartridge();
+            }
+            if(ImGui::MenuItem("Close"))
+            {
+                close_cartridge();
             }
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
     }
+}
+
+void App::open_cartridge() 
+{
+    Luna::lutry
+    {
+        const Luna::c8* extensions[] = {"gb"};
+        Luna::Window::FileDialogFilter filter;
+        filter.name = "GameBoy cartridge file";
+        filter.extensions = {extensions, 1};
+        auto result = Luna::Window::open_file_dialog("Select gameboy file", {&filter, 1});
+        if (Luna::succeeded(result) && !result.get().empty())
+        {
+            close_cartridge();
+            auto& path = result.get()[0];
+            lulet(f, open_file(path.encode().c_str(), FileOpenFlag::read, FileCreationMode::open_existing));
+            lulet(rom_data, load_file_data(f));
+            Luna::UniquePtr<Emulator> emu(memnew<Emulator>());
+            luexp(emu->init(rom_data.data(), rom_data.size()));
+            emulator = Luna::move(emu);
+            Luna::log_debug("LunaGB", "Load gb file success, path: %s, size: %u", path.encode().c_str(), rom_data.size());
+        }
+        
+    }
+    lucatch
+    {
+        auto _ = Luna::Window::message_box("Fail to open cartridge file.",
+                                  "Load cartridge faile",
+                                  Luna::Window::MessageBoxType::ok,
+                                  Luna::Window::MessageBoxIcon::error);
+    }
+}
+
+void App::close_cartridge() 
+{
+    emulator.reset();
 }
